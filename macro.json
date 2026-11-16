@@ -1,0 +1,6 @@
+{
+  "name": "저지아이즈 마작",
+  "cmd": ".venv/bin/python -u main.py",
+  "limit_min": 0,
+  "after": "none"
+}
