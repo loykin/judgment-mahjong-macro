@@ -49,6 +49,7 @@ class Bot:
         self.last_look = 0.0
         self.lowered = False         # moved the cursor once to read a raised tile it did not know
         self.asked_riichi = False    # pressed □ for riichi this turn
+        self.sanshoku_said = False
 
     # ---------------------------------------------------------------- io
     def tap(self, button, hold=0.08):
@@ -188,6 +189,12 @@ class Bot:
                 visible[engine.INDEX[n]] += 1
         visible = [min(4, v) for v in visible]
         riichi_seats = [st for st in ('right', 'top', 'left') if any(sw for _, sw, _ in rivers[st])]
+        indicators = vision.read_dora_indicators(img, self.rt)
+        dora = tuple(engine.dora_of(engine.INDEX[n]) for n in indicators)
+        target = engine.sanshoku_target(c) if called == 0 else None
+        if target and not self.sanshoku_said:
+            self.sanshoku_said = True
+            print(f'  three-colour straight in reach: keeping {" ".join(engine.NAMES[t] for t in target)}')
         folding = False
         if self.riichi:
             # after riichi the drawn tile goes unless it wins (the win prompt comes first)
@@ -198,8 +205,10 @@ class Bot:
             if self.riichi_pending:
                 allowed = set(engine.tenpai_discards(c, called))
                 keep = tuple(t for t in range(34) if t not in allowed)
-            t, s, u = engine.choose_discard(c, visible=visible, called=called, keep=keep)
-            reason = f'discard {engine.NAMES[t]} (shanten {s} after, {u} useful tiles left)'
+            t, s, u = engine.choose_discard(c, visible=visible, called=called, keep=keep, dora=dora, target=target)
+            extra = f', dora {" ".join(engine.NAMES[d] for d in dora)}' if dora else ''
+            extra += ', sanshoku' if target else ''
+            reason = f'discard {engine.NAMES[t]} (shanten {s} after, {u} useful tiles left{extra})'
             if riichi_seats and not self.riichi_pending and s > 0:
                 # someone is in riichi and we are not ready: give up the hand, discard the safest tile
                 rivers_ids = [{engine.INDEX[n] for n, _, _ in rivers[st]} for st in riichi_seats]
@@ -262,6 +271,7 @@ class Bot:
             print(f'end of hand ({footer or "score plates"}) -> continue')
             self.riichi = self.riichi_pending = False
             self.winds = None
+            self.sanshoku_said = False
             self.tap('cross')
             time.sleep(1.0)
             return

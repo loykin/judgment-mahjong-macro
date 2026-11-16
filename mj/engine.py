@@ -164,9 +164,10 @@ def _isolation(counts, t):
     return (2 if near == 0 else 0) + edge
 
 
-def choose_discard(counts, visible=None, called=0, keep=()):
-    """Best tile to discard from a 14-tile hand: lowest shanten after it, then most useful tiles left,
-    then the more isolated tile. Returns (tile, shanten_after, ukeire_count)."""
+def choose_discard(counts, visible=None, called=0, keep=(), dora=(), target=None):
+    """Best tile to discard from a 14-tile hand: lowest shanten after it, then the most useful tiles left
+    weighted by what the hand is worth (dora, tanyao, a targeted three-colour straight), then the more
+    isolated tile. Returns (tile, shanten_after, ukeire_count)."""
     best = None
     for t in range(34):
         if counts[t] == 0 or t in keep:
@@ -174,8 +175,9 @@ def choose_discard(counts, visible=None, called=0, keep=()):
         counts[t] -= 1
         s = shanten(counts, called)
         u = sum(ukeire(counts, visible, called).values())
+        worth = u * value(counts, dora, target)
         counts[t] += 1
-        key = (s, -u, -_isolation(counts, t))
+        key = (s, -worth, -u, -_isolation(counts, t))
         if best is None or key < best[0]:
             best = (key, t, s, u)
     _, t, s, u = best
@@ -235,3 +237,37 @@ def defensive_discard(counts, riichi_rivers, visible, called=0):
             best = (key, t, d, s)
     _, t, d, s = best
     return t, d, s
+
+
+# ---------------------------------------------------------------- hand value: dora, tanyao, sanshoku
+
+def dora_of(indicator):
+    """The dora a dora indicator points to."""
+    if indicator < 27:
+        return indicator - indicator % 9 + (indicator % 9 + 1) % 9
+    if indicator < 31:
+        return 27 + (indicator - 27 + 1) % 4
+    return 31 + (indicator - 31 + 1) % 3
+
+
+def sanshoku_target(counts, need=6):
+    """Tiles of the most complete three-colour straight (n, n+1, n+2 in all three suits) when at least
+    `need` of its 9 kinds are already held; else None."""
+    best = None
+    for n in range(7):
+        tiles = [s * 9 + n + k for s in range(3) for k in range(3)]
+        have = sum(1 for t in tiles if counts[t])
+        if have >= need and (best is None or have > best[0]):
+            best = (have, tuple(tiles))
+    return best[1] if best else None
+
+
+def value(counts, dora=(), target=None):
+    """A multiplier for how much a hand is worth chasing: dora kept, tanyao still possible, progress
+    toward a three-colour straight (when one is targeted)."""
+    v = 1.0 + 0.3 * sum(counts[d] for d in dora)
+    if not any(counts[t] for t in TERMINALS_HONORS):
+        v += 0.3
+    if target:
+        v += 3.0 * sum(1 for t in target if counts[t]) / len(target)
+    return v

@@ -378,3 +378,20 @@ def read_rivers(img, river_templates, max_dist=40.0):
         if best[1] <= max_dist:
             out[seat].append((best[0], sideways, (cx, cy)))
     return out
+
+
+def read_dora_indicators(img, river_templates):
+    """Face-up dora indicators on the dead wall under the centre panel (one, more after a kan)."""
+    from scipy import ndimage
+    y0, x0 = 500, 780
+    white = img[y0:640, x0:1150].min(axis=2) > 175
+    labels, _ = ndimage.label(white)
+    out = []
+    for sl in ndimage.find_objects(labels):
+        h, w = sl[0].stop - sl[0].start, sl[1].stop - sl[1].start
+        if 38 <= w <= 52 and 54 <= h <= 72:
+            y, x = sl[0].start + y0, sl[1].start + x0
+            name, dist = river_templates.match(tile_face(img[y:y + h, x:x + w]))
+            if dist < 40:
+                out.append((x, name))
+    return [n for _, n in sorted(out)]

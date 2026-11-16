@@ -87,3 +87,23 @@ class Defence(unittest.TestCase):
         visible = list(hand)
         t, d, s = e.defensive_discard(hand, [river], visible)
         self.assertEqual((e.NAMES[t], d), ('9s', 0.0))
+
+
+class Value(unittest.TestCase):
+    def test_dora_follows_its_indicator(self):
+        for ind, dora in (('8m', '9m'), ('9m', '1m'), ('N', 'E'), ('C', 'P'), ('2p', '3p')):
+            self.assertEqual(e.NAMES[e.dora_of(e.INDEX[ind])], dora)
+
+    def test_keeps_the_dora_between_equal_tiles(self):
+        hand = e.parse('234m 456p 678s 33m 5p 1s 9s')
+        self.assertEqual(e.NAMES[e.choose_discard(hand)[0]], '1s')   # the weakest tile, without dora
+        t, _, _ = e.choose_discard(hand, dora=(e.INDEX['1s'],))
+        self.assertNotEqual(e.NAMES[t], '1s')                        # kept once it is dora
+
+    def test_sanshoku_mode_keeps_the_straight(self):
+        hand = e.parse('345m 34p 45s 99m 1p 7s 8s E')
+        target = e.sanshoku_target(hand)
+        self.assertEqual(sorted(e.NAMES[t] for t in target), sorted(['3m', '4m', '5m', '3p', '4p', '5p', '3s', '4s', '5s']))
+        t, _, _ = e.choose_discard(hand, target=target)
+        self.assertNotIn(e.NAMES[t], ('3p', '4p', '4s', '5s'))
+        self.assertIsNone(e.sanshoku_target(e.parse('147m 258p 369s ESWN')))
