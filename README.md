@@ -91,6 +91,14 @@ psconnector-view 바에서 **Reload macro list** 후 "저지아이즈 마작"을
 .venv/bin/python -u main.py --games 3     # 3게임 뒤 메뉴에서 멈춤
 ```
 
+## 기록
+
+뷰어를 닫아도 남도록 파일에 기록합니다(git에는 올리지 않음).
+
+- `logs/YYYY-MM-DD.log`: 매크로가 출력한 모든 줄(시간 포함)
+- `stats.json`: 실행을 넘어 쌓이는 합계. 국 수, 게임 수, 화료(론·쯔모), 리치, 수비, 펑, 화료한 역과 크기(만관·하네만 등)
+- `logs/wins/`: 내 화료 결과 화면
+
 ## 모르는 화면이 나오면
 
 `unknown/`에 화면이 저장되고 매크로가 멈춥니다(로그에 이유가 나옵니다). 패라면 그 칸을 잘라 `templates/hand/이름_N.png`로, 선택지라면 `templates/prompt/`에 추가하고 다시 실행합니다.

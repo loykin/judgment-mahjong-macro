@@ -20,7 +20,7 @@ import time
 
 import numpy as np
 
-from mj import engine, vision
+from mj import engine, record, vision
 from psconnector import PS
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -28,6 +28,7 @@ UNKNOWN = os.path.join(HERE, 'unknown')
 # OCR regions as screen fractions (x0, y0, x1, y1)
 FOOTER = (1300 / 1920, 1020 / 1080, 1.0, 1.0)
 MENU = (0.3, 0.3, 0.7, 0.62)
+RESULT = (464 / 1920, 300 / 1080, 1456 / 1920, 800 / 1080)  # yaku, han and points on a result screen
 ROUND = (823 / 1920, 440 / 1080, 1097 / 1920, 500 / 1080)   # "동1국" in the middle of the table
 WIND = {'동': 'E', '남': 'S', '서': 'W', '북': 'N'}
 DRAGONS = ('P', 'F', 'C')
@@ -50,6 +51,10 @@ class Bot:
         self.lowered = False         # moved the cursor once to read a raised tile it did not know
         self.asked_riichi = False    # pressed □ for riichi this turn
         self.sanshoku_said = False
+        self.won_at = 0.0            # when we took a win prompt (its result screen is ours)
+        self.win_recorded = True
+        self.hand_end_at = 0.0
+        self.folded = False
 
     # ---------------------------------------------------------------- io
     def tap(self, button, hold=0.08):
@@ -150,11 +155,16 @@ class Bot:
                 print(f'prompt {seen} -> take "{word}" ({why})')
                 self.tap('cross')
                 if '론' in word or '쯔모' in word:
+                    record.bump('ron' if '론' in word else 'tsumo')
+                    self.won_at, self.win_recorded = time.time(), False
                     self.wins += 1
                     self.osd(f'화료 {self.wins}')
                     time.sleep(3.0)  # the winning hand is shown open next; not ours to discard from
                 elif '리치' in word:
+                    record.bump('riichi')
                     self.riichi_pending = True
+                elif '펑' in word:
+                    record.bump('pons')
                 self.unknown_prompt = 0
                 time.sleep(0.8)
                 return
@@ -214,6 +224,9 @@ class Bot:
                 rivers_ids = [{engine.INDEX[n] for n, _, _ in rivers[st]} for st in riichi_seats]
                 t, d, s2 = engine.defensive_discard(c, rivers_ids, visible, called)
                 folding = True
+                if not self.folded:
+                    self.folded = True
+                    record.bump('folds')
                 reason = f'riichi by {"/".join(riichi_seats)}: fold, discard {engine.NAMES[t]} (danger {d:g})'
             name = engine.NAMES[t]
             # the rightmost copy, so the drawn tile goes when it is the one
@@ -268,10 +281,25 @@ class Bot:
     def on_other(self, img):
         footer = self.ocr(FOOTER, scale=2.0)
         if '진행' in footer or vision.score_band(img):
+            if time.time() - self.hand_end_at > 8:
+                record.bump('hands')
+            self.hand_end_at = time.time()
+            if '진행' in footer and not self.win_recorded and time.time() - self.won_at < 60:
+                # our win: keep its yaku and size
+                self.win_recorded = True
+                lines = self.ps.ocr(rel=RESULT, scale=1.5) if not self.dry else []
+                result = record.parse_result(lines)
+                os.makedirs(os.path.join(record.LOGS, 'wins'), exist_ok=True)
+                shot = os.path.join(record.LOGS, 'wins', time.strftime('%Y%m%d-%H%M%S') + '.jpg')
+                from PIL import Image
+                Image.fromarray(img).save(shot, quality=85)
+                record.record_win(result, os.path.relpath(shot, HERE))
+                print(f'our win: {result}')
             print(f'end of hand ({footer or "score plates"}) -> continue')
             self.riichi = self.riichi_pending = False
             self.winds = None
             self.sanshoku_said = False
+            self.folded = False
             self.tap('cross')
             time.sleep(1.0)
             return
@@ -282,6 +310,7 @@ class Bot:
             if self.games_left > 1:
                 self.games_left -= 1
             print('parlour menu -> start a game')
+            record.bump('games')
             self.tap('cross')
             time.sleep(2.0)
 
@@ -342,6 +371,8 @@ def main():
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)  # also when started in the background, where SIGINT is ignored
+    if not a.dry_run:
+        record.start_logging()
     ps = PS()
     bot = Bot(ps, dry_run=a.dry_run, games=a.games)
     print(f'mahjong bot started{" (dry run)" if a.dry_run else ""}')
