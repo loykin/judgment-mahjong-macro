@@ -259,7 +259,7 @@ def score_band(img):
 # ---------------------------------------------------------------- the word on the call/win prompt
 
 WORD_BOX = (940, 985, 1600, 1840)  # y0, y1, x0, x1 of the word on the prompt
-WORDS = {'chi': '치', 'pon': '펑', 'kan': '깡', 'ron': '론', 'tsumo': '쯔모', 'riichi': '리치'}
+WORDS = {'chi': '치', 'pon': '펑', 'kan': '깡', 'ron': '론', 'tsumo': '쯔모', 'riichi': '리치', 'openriichi': '오픈리치'}
 
 
 def _ink(crop):

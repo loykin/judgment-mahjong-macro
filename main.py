@@ -55,6 +55,7 @@ class Bot:
         self.win_recorded = True
         self.hand_end_at = 0.0
         self.folded = False
+        self.open_riichi = False     # our riichi this hand is an open riichi (its win counts for Tachibana)
 
     # ---------------------------------------------------------------- io
     def tap(self, button, hold=0.08):
@@ -121,13 +122,16 @@ class Bot:
         return text
 
     def wanted(self, word, img, hand):
-        """Whether to take this option, and why."""
+        """How much this option is worth taking (0 = not), and why. Higher wins when several are offered."""
         if '론' in word or '쯔모' in word:
-            return True, 'win'
+            return 4, 'win'
         if '리치' in word:
             c = vision.counts(hand) if hand and all(s.name for s in hand) else None
             ready = c is not None and sum(c) == 14 and bool(engine.tenpai_discards(c))
-            return ready, 'riichi' + ('' if ready else ' (hand not read as ready)')
+            if not ready:
+                return 0, 'riichi, but the hand is not read as ready'
+            # Tachibana: open riichi wins are their own completion item, so it beats a plain riichi
+            return (3, 'open riichi') if '오픈' in word else (2, 'riichi')
         if '펑' in word or '퐁' in word:
             # a pon of a value tile (dragons, round or seat wind) gives the hand its yaku
             names = [sl.name for sl in hand if sl.name]
@@ -135,46 +139,31 @@ class Bot:
             match, kind = vision.called_tile(before, img, names) if before is not None else (None, None)
             values = self.yakuhai(img)
             take = bool(match) and all(n in values for n in match)
-            return take, f'pon: new discard looks {kind}, candidates {match}, value tiles {sorted(values)}'
-        return False, 'call'
+            return (1 if take else 0), f'pon: new discard looks {kind}, candidates {match}, value tiles {sorted(values)}'
+        return 0, 'call'
+
+    def highlighted(self, img):
+        yc = vision.selected_option(img)
+        return self.prompt_text(img, yc) if yc is not None else None
 
     def on_prompt(self, img, hand):
-        """One or more options stacked above "○ 그만두기". Reads the highlighted one, steps down through
-        the rest, takes the first one worth taking, otherwise cancels."""
-        seen = []
-        for _ in range(5):
-            yc = vision.selected_option(img)
-            if yc is None:
+        """One or more options stacked above "○ 그만두기". Reads the highlighted one and steps down through
+        the rest, then takes the most valuable (win > open riichi > riichi > value-tile pon) or cancels."""
+        options = []
+        for _ in range(6):
+            word = self.highlighted(img)
+            if not word or word in [w for w, _, _ in options]:
                 break
-            word = self.prompt_text(img, yc)
-            if not word or word in seen:
-                break
-            seen.append(word)
-            take, why = self.wanted(word, img, hand)
-            if take:
-                print(f'prompt {seen} -> take "{word}" ({why})')
-                self.tap('cross')
-                if '론' in word or '쯔모' in word:
-                    record.bump('ron' if '론' in word else 'tsumo')
-                    self.won_at, self.win_recorded = time.time(), False
-                    self.wins += 1
-                    self.osd(f'화료 {self.wins}')
-                    time.sleep(3.0)  # the winning hand is shown open next; not ours to discard from
-                elif '리치' in word:
-                    record.bump('riichi')
-                    self.riichi_pending = True
-                elif '펑' in word:
-                    record.bump('pons')
-                self.unknown_prompt = 0
-                time.sleep(0.8)
-                return
-            if not any(w in word for w in vision.WORDS.values()):
-                break  # a word it does not know: do not step past it
+            score, why = self.wanted(word, img, hand)
+            options.append((word, score, why))
+            if score >= 4 or not any(w in word for w in vision.WORDS.values()):
+                break  # a win needs no comparing; an unknown word: do not step past it
             self.tap('down', hold=0.05)
             time.sleep(0.35)
             img = self.frame()
             if not vision.prompt_visible(img):
                 return
+        seen = [w for w, _, _ in options]
         known = seen and all(any(w in x for w in vision.WORDS.values()) for x in seen)
         if not known:
             # the box slides in: give it a moment before calling the word unknown
@@ -184,9 +173,39 @@ class Bot:
                 return
             path = self.save_unknown(img, 'prompt')
             raise SystemExit(f'unknown prompt {seen}, saved {path}; stopping')
-        print(f'prompt {seen} -> pass')
-        self.tap('circle')
         self.unknown_prompt = 0
+        best = max(options, key=lambda o: o[1])
+        if best[1] <= 0:
+            print(f'prompt {seen} -> pass')
+            self.tap('circle')
+            time.sleep(0.8)
+            return
+        word = best[0]
+        # move the highlight back to it (up first: the list may or may not wrap around)
+        for step in ['up'] * 6 + ['down'] * 6:
+            if self.highlighted(img) == word:
+                break
+            self.tap(step, hold=0.05)
+            time.sleep(0.3)
+            img = self.frame()
+        if self.highlighted(img) != word:
+            print(f'prompt {seen}: could not highlight "{word}" again; passing')
+            self.tap('circle')
+            return
+        print(f'prompt {seen} -> take "{word}" ({best[2]})')
+        self.tap('cross')
+        if '론' in word or '쯔모' in word:
+            record.bump('ron' if '론' in word else 'tsumo')
+            self.won_at, self.win_recorded = time.time(), False
+            self.wins += 1
+            self.osd(f'화료 {self.wins}')
+            time.sleep(3.0)  # the winning hand is shown open next; not ours to discard from
+        elif '리치' in word:
+            record.bump('open_riichi' if '오픈' in word else 'riichi')
+            self.riichi_pending = True
+            self.open_riichi = '오픈' in word
+        elif '펑' in word:
+            record.bump('pons')
         time.sleep(0.8)
 
     def on_turn(self, hand, img):
