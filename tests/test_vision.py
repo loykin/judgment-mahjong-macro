@@ -69,10 +69,17 @@ class Screens(unittest.TestCase):
 class PromptWords(unittest.TestCase):
     def test_each_saved_prompt_is_read_back(self):
         folder = os.path.join(HERE, 'templates', 'prompt')
-        for sample, key in (('prompt_chi.png', 'chi'), ('prompt_pon.png', 'pon'), ('prompt_ron.png', 'ron')):
-            got, d = vision.prompt_word(load(sample), folder)
-            self.assertEqual(got, key)
-            self.assertLess(d, 0.05)
+        for sample, key in (('prompt_chi.png', 'chi'), ('prompt_pon.png', 'pon'), ('prompt_ron.png', 'ron'),
+                            ('prompt_chi_pon.png', 'chi')):
+            img = load(sample)
+            self.assertTrue(vision.prompt_visible(img), sample)
+            got, d = vision.prompt_word(img, folder, vision.selected_option(img))
+            self.assertEqual(got, key, sample)
+            self.assertLess(d, 0.1)
+
+    def test_no_prompt_elsewhere(self):
+        for sample in ('042.png', 'result_win.png', 'settle_draw.png', 'action_menu.png'):
+            self.assertFalse(vision.prompt_visible(load(sample)), sample)
 
     def test_score_plates_on_a_win(self):
         self.assertTrue(vision.score_band(load('result_win.png')))

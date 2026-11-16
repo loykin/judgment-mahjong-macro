@@ -96,11 +96,51 @@ def counts(slots):
     return engine.parse([s.name for s in slots])
 
 
+CANCEL_BOX = (1005, 1050, 1750, 1900)  # y0, y1, x0, x1 of "○ 그만두기" under every call/win prompt
+
+
+def _shape_distance(ink, ref, shifts_y=(-3, 0, 3), shifts_x=(-6, -3, 0, 3, 6)):
+    best = 1.0
+    for dy in shifts_y:
+        for dx in shifts_x:
+            r = np.roll(np.roll(ref, dy, axis=0), dx, axis=1)
+            best = min(best, 1 - (ink & r).sum() / max(1, (ink | r).sum()))
+    return float(best)
+
+
+_cancel = None
+
+
 def prompt_visible(img):
-    """True when the dark call/win prompt box is on screen (bottom right)."""
-    x0, y0, x1, y1 = PROMPT
-    box = img[935:990, 1580:1850]
-    return (box.max(axis=2) < 70).mean() > 0.5
+    """True when a call/win prompt is up: every one has "○ 그만두기" at the same place, however many
+    options are stacked above it."""
+    global _cancel
+    if _cancel is None:
+        _cancel = _ink_bright(_load_png(os.path.join(os.path.dirname(__file__), '..', 'templates', 'prompt',
+                                                     '_cancel.png')))
+    y0, y1, x0, x1 = CANCEL_BOX
+    return _shape_distance(_ink_bright(img[y0:y1, x0:x1]), _cancel) < 0.5
+
+
+def _ink_bright(crop):
+    return crop.min(axis=2) > 200
+
+
+def selected_option(img):
+    """Centre y of the highlighted (dark) option box above the cancel line, or None."""
+    band = (img[700:1000, 1650:1800].max(axis=2) < 70).mean(axis=1)
+    rows = np.nonzero(band > 0.6)[0]
+    if len(rows) < 20:
+        return None
+    # the longest run of dark rows
+    runs, start = [], rows[0]
+    for a, b in zip(rows, rows[1:]):
+        if b != a + 1:
+            runs.append((start, a))
+            start = b
+    runs.append((start, rows[-1]))
+    a, b = max(runs, key=lambda r: r[1] - r[0])
+    return 700 + (a + b) // 2
 
 
 # ---------------------------------------------------------------- the tile just discarded (for calls)
@@ -226,22 +266,24 @@ def _ink(crop):
     return crop.min(axis=2) > 150
 
 
-def word_crop(img):
+def word_crop(img, yc=None):
+    """The word on the highlighted option box centred at yc (the single-box position by default)."""
     y0, y1, x0, x1 = WORD_BOX
+    if yc is not None:
+        y0, y1 = yc - 22, yc + 23
     return img[y0:y1, x0:x1]
 
 
-def prompt_word(img, folder):
-    """(key, distance) of the closest saved prompt word ('ron', 'pon', ...), comparing the bright letter
-    shapes, allowing a few pixels of shift. Distance 0 = same shape, 1 = nothing in common."""
-    ink = _ink(word_crop(img))
+def prompt_word(img, folder, yc=None):
+    """(key, distance) of the closest saved prompt word ('ron', 'pon', ...) on the highlighted box,
+    comparing the bright letter shapes. Distance 0 = same shape, 1 = nothing in common."""
+    ink = _ink(word_crop(img, yc))
     best, dist = None, 1.0
     for f in glob.glob(os.path.join(folder, '*.png')):
-        ref = _ink(_load_png(f))
-        for dy in (-2, 0, 2):
-            for dx in (-4, -2, 0, 2, 4):
-                r = np.roll(np.roll(ref, dy, axis=0), dx, axis=1)
-                d = 1 - (ink & r).sum() / max(1, (ink | r).sum())
-                if d < dist:
-                    best, dist = os.path.splitext(os.path.basename(f))[0], float(d)
+        key = os.path.splitext(os.path.basename(f))[0]
+        if key.startswith('_'):
+            continue
+        d = _shape_distance(ink, _ink(_load_png(f)), range(-4, 5), range(-6, 7, 2))
+        if d < dist:
+            best, dist = key, d
     return best, dist

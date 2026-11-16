@@ -26,7 +26,6 @@ from psconnector import PS
 HERE = os.path.dirname(os.path.abspath(__file__))
 UNKNOWN = os.path.join(HERE, 'unknown')
 # OCR regions as screen fractions (x0, y0, x1, y1)
-PROMPT_TEXT = (1580 / 1920, 930 / 1080, 1860 / 1920, 995 / 1080)
 FOOTER = (1300 / 1920, 1020 / 1080, 1.0, 1.0)
 MENU = (0.3, 0.3, 0.7, 0.62)
 ROUND = (823 / 1920, 440 / 1080, 1097 / 1920, 500 / 1080)   # "동1국" in the middle of the table
@@ -48,6 +47,7 @@ class Bot:
         self.unknown_prompt = 0
         self.last_look = 0.0
         self.lowered = False         # moved the cursor once to read a raised tile it did not know
+        self.asked_riichi = False    # pressed □ for riichi this turn
 
     # ---------------------------------------------------------------- io
     def tap(self, button, hold=0.08):
@@ -95,61 +95,85 @@ class Bot:
         return set(DRAGONS) | {rw} | ({sw} if sw else set())
 
     # ---------------------------------------------------------------- decisions
-    def prompt_text(self, img):
-        """The prompt's word: matched against saved letter shapes; a new word is read with OCR and its
-        shape saved, so it is recognised by shape from then on (OCR misreads single syllables)."""
+    def prompt_text(self, img, yc):
+        """The word on the highlighted option: matched against saved letter shapes; a new word is read
+        with OCR and its shape saved, so it is recognised by shape from then on (OCR misreads single
+        syllables, e.g. 론 as 굴)."""
         folder = os.path.join(HERE, 'templates', 'prompt')
-        key, dist = vision.prompt_word(img, folder)
+        key, dist = vision.prompt_word(img, folder, yc)
         if key and dist < 0.35:
             return vision.WORDS.get(key, key)
-        text = self.ocr(PROMPT_TEXT, scale=3.0).replace(' ', '')
-        key = next((k for k, w in vision.WORDS.items() if w in text), None)
+        rel = (1600 / 1920, (yc - 25) / 1080, 1840 / 1920, (yc + 25) / 1080)
+        text = self.ocr(rel, scale=3.0).replace(' ', '')
+        # longest word first: 리치 contains 치
+        key = next((k for k, w in sorted(vision.WORDS.items(), key=lambda kv: -len(kv[1])) if w in text), None)
         if key and not os.path.exists(os.path.join(folder, key + '.png')):
             from PIL import Image
-            Image.fromarray(vision.word_crop(img)).save(os.path.join(folder, key + '.png'))
+            Image.fromarray(vision.word_crop(img, yc)).save(os.path.join(folder, key + '.png'))
             print(f'  learned the prompt word "{text}" as {key}')
         return text
 
-    def on_prompt(self, img, hand):
-        text = self.prompt_text(img)
-        if not text:
-            return
-        if '론' in text or '쯔모' in text:
-            print(f'win prompt "{text}" -> accept')
-            self.tap('cross')
-            self.wins += 1
-            self.osd(f'화료 {self.wins}')
-            time.sleep(3.0)  # the winning hand is shown open next; it is not ours to discard from
-        elif '리치' in text:
+    def wanted(self, word, img, hand):
+        """Whether to take this option, and why."""
+        if '론' in word or '쯔모' in word:
+            return True, 'win'
+        if '리치' in word:
             c = vision.counts(hand) if hand and all(s.name for s in hand) else None
-            ready = c is not None and sum(c) == 14 and engine.tenpai_discards(c)
-            print(f'riichi prompt, hand {hand} -> {"accept" if ready else "decline"}')
-            if ready:
-                self.tap('cross')
-                self.riichi_pending = True
-            else:
-                self.tap('circle')
-        elif '펑' in text or '퐁' in text:
-            # a pon of a value tile (dragons, round or seat wind) gives the hand its yaku: take it
-            names = [s.name for s in hand if s.name]
+            ready = c is not None and sum(c) == 14 and bool(engine.tenpai_discards(c))
+            return ready, 'riichi' + ('' if ready else ' (hand not read as ready)')
+        if '펑' in word or '퐁' in word:
+            # a pon of a value tile (dragons, round or seat wind) gives the hand its yaku
+            names = [sl.name for sl in hand if sl.name]
             before = next((f for t, f in reversed(self.history) if time.time() - t > 0.4), None)
             match, kind = vision.called_tile(before, img, names) if before is not None else (None, None)
             values = self.yakuhai(img)
             take = bool(match) and all(n in values for n in match)
-            print(f'pon prompt: new discard looks {kind}, candidates {match}, value tiles {sorted(values)}'
-                  f' -> {"accept" if take else "decline"}')
-            self.tap('cross' if take else 'circle')
-        elif any(k in text for k in ('치', '깡')):
-            print(f'call prompt "{text}" -> decline')
-            self.tap('circle')
-        else:
+            return take, f'pon: new discard looks {kind}, candidates {match}, value tiles {sorted(values)}'
+        return False, 'call'
+
+    def on_prompt(self, img, hand):
+        """One or more options stacked above "○ 그만두기". Reads the highlighted one, steps down through
+        the rest, takes the first one worth taking, otherwise cancels."""
+        seen = []
+        for _ in range(5):
+            yc = vision.selected_option(img)
+            if yc is None:
+                break
+            word = self.prompt_text(img, yc)
+            if not word or word in seen:
+                break
+            seen.append(word)
+            take, why = self.wanted(word, img, hand)
+            if take:
+                print(f'prompt {seen} -> take "{word}" ({why})')
+                self.tap('cross')
+                if '론' in word or '쯔모' in word:
+                    self.wins += 1
+                    self.osd(f'화료 {self.wins}')
+                    time.sleep(3.0)  # the winning hand is shown open next; not ours to discard from
+                elif '리치' in word:
+                    self.riichi_pending = True
+                self.unknown_prompt = 0
+                time.sleep(0.8)
+                return
+            if not any(w in word for w in vision.WORDS.values()):
+                break  # a word it does not know: do not step past it
+            self.tap('down', hold=0.05)
+            time.sleep(0.35)
+            img = self.frame()
+            if not vision.prompt_visible(img):
+                return
+        known = seen and all(any(w in x for w in vision.WORDS.values()) for x in seen)
+        if not known:
             # the box slides in: give it a moment before calling the word unknown
             self.unknown_prompt += 1
             if self.unknown_prompt < 4:
                 time.sleep(0.25)
                 return
             path = self.save_unknown(img, 'prompt')
-            raise SystemExit(f'unknown prompt "{text}", saved {path}; stopping')
+            raise SystemExit(f'unknown prompt {seen}, saved {path}; stopping')
+        print(f'prompt {seen} -> pass')
+        self.tap('circle')
         self.unknown_prompt = 0
         time.sleep(0.8)
 
@@ -171,6 +195,20 @@ class Bot:
             target = max(sl.index for sl in hand if sl.name == name)
             reason = f'discard {name} (shanten {s} after, {u} useful tiles left)'
         cursor = next((sl.index for sl in hand if sl.raised), None)
+        if called == 0 and not self.riichi and not self.riichi_pending and not self.asked_riichi \
+                and engine.tenpai_discards(c):
+            # riichi is not offered on its own: □ opens the action commands, where it should be
+            self.asked_riichi = True
+            print('  ready for riichi: opening the action commands (□)')
+            self.tap('square')
+            time.sleep(0.8)
+            img = self.frame()
+            if vision.prompt_visible(img):
+                self.on_prompt(img, hand)
+                return  # read the hand again: after riichi the discard must keep it ready
+            self.tap('square')  # nothing came up: put the commands back as they were
+            time.sleep(0.4)
+            print(f'  no action command appeared; saved {self.save_unknown(img, "no-riichi")}')
         print(f'hand {" ".join(sl.name for sl in hand)} | cursor {cursor} -> {reason}')
         self.osd(f'{" ".join(sl.name for sl in hand)}\n{reason}')
         if cursor is None:
@@ -191,6 +229,7 @@ class Bot:
             return
         self.tap('cross')
         self.discards += 1
+        self.asked_riichi = False
         if self.riichi_pending:
             self.riichi, self.riichi_pending = True, False
         # wait for the tile to leave the hand
