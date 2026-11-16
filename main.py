@@ -37,6 +37,7 @@ class Bot:
     def __init__(self, ps, dry_run=False, games=0):
         self.ps, self.dry, self.games_left = ps, dry_run, games
         self.tpl = vision.Templates(os.path.join(HERE, 'templates', 'hand'))
+        self.rt = vision.RiverTemplates(os.path.join(HERE, 'templates', 'hand'))
         self.wins = self.discards = 0
         self.riichi = False          # we declared riichi this hand
         self.riichi_pending = False  # accepted the riichi prompt, the discard must keep tenpai
@@ -177,9 +178,17 @@ class Bot:
         self.unknown_prompt = 0
         time.sleep(0.8)
 
-    def on_turn(self, hand):
+    def on_turn(self, hand, img):
         c = vision.counts(hand)
         called = (14 - len(hand)) // 3   # pon/chi already made: 11 tiles in hand = one call
+        rivers = vision.read_rivers(img, self.rt)
+        visible = list(c)
+        for tiles in rivers.values():
+            for n, _, _ in tiles:
+                visible[engine.INDEX[n]] += 1
+        visible = [min(4, v) for v in visible]
+        riichi_seats = [st for st in ('right', 'top', 'left') if any(sw for _, sw, _ in rivers[st])]
+        folding = False
         if self.riichi:
             # after riichi the drawn tile goes unless it wins (the win prompt comes first)
             target = len(hand) - 1
@@ -189,14 +198,20 @@ class Bot:
             if self.riichi_pending:
                 allowed = set(engine.tenpai_discards(c, called))
                 keep = tuple(t for t in range(34) if t not in allowed)
-            t, s, u = engine.choose_discard(c, called=called, keep=keep)
+            t, s, u = engine.choose_discard(c, visible=visible, called=called, keep=keep)
+            reason = f'discard {engine.NAMES[t]} (shanten {s} after, {u} useful tiles left)'
+            if riichi_seats and not self.riichi_pending and s > 0:
+                # someone is in riichi and we are not ready: give up the hand, discard the safest tile
+                rivers_ids = [{engine.INDEX[n] for n, _, _ in rivers[st]} for st in riichi_seats]
+                t, d, s2 = engine.defensive_discard(c, rivers_ids, visible, called)
+                folding = True
+                reason = f'riichi by {"/".join(riichi_seats)}: fold, discard {engine.NAMES[t]} (danger {d:g})'
             name = engine.NAMES[t]
             # the rightmost copy, so the drawn tile goes when it is the one
             target = max(sl.index for sl in hand if sl.name == name)
-            reason = f'discard {name} (shanten {s} after, {u} useful tiles left)'
         cursor = next((sl.index for sl in hand if sl.raised), None)
         if called == 0 and not self.riichi and not self.riichi_pending and not self.asked_riichi \
-                and engine.tenpai_discards(c):
+                and not folding and engine.tenpai_discards(c):
             # riichi is not offered on its own: □ opens the action commands, where it should be
             self.asked_riichi = True
             print('  ready for riichi: opening the action commands (□)')
@@ -283,10 +298,11 @@ class Bot:
                     self.tap('left' if unknown[0].index > 0 else 'right', hold=0.05)
                     time.sleep(0.3)
                     return
-                # a tile it cannot read: keep the picture for labelling, after it held still
+                # a tile it cannot read: keep the picture for labelling once it held still for a few
+                # seconds (a winning draw glows gold until the tsumo prompt comes up)
                 self.stable = self.stable + 1 if names == self.last_names else 0
                 self.last_names = names
-                if self.stable >= 3:
+                if self.stable >= 12:
                     path = self.save_unknown(img, 'tile')
                     raise SystemExit(f'unknown tile in the hand {hand}, saved {path}; stopping')
                 return
@@ -294,7 +310,7 @@ class Bot:
             self.stable = self.stable + 1 if names == self.last_names else 0
             self.last_names = names
             if self.stable >= 1:
-                self.on_turn(hand)
+                self.on_turn(hand, img)
                 self.lowered = False
             return
         self.last_names, self.stable = None, 0

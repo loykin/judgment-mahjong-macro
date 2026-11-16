@@ -287,3 +287,94 @@ def prompt_word(img, folder, yc=None):
         if d < dist:
             best, dist = key, d
     return best, dist
+
+
+# ---------------------------------------------------------------- the discard rivers
+
+RIVER_SIZE = (48, 66)  # width, height a river tile is compared at, upright
+# seats by where their river lies, and how far their tiles are turned (degrees, counter-clockwise)
+SEAT_TURN = {'self': 0, 'right': 90, 'top': 180, 'left': 270}
+
+
+def _seat_of(cx, cy):
+    """Which player's river a tile centred at (cx, cy) belongs to, or None (dora, melds, hand...)."""
+    # rivers grow away from the centre: rows for us and the top player, columns for the sides
+    if 700 <= cy <= 880 and 560 <= cx <= 1360:
+        return 'self'
+    if 80 <= cy <= 300 and 600 <= cx <= 1400:
+        return 'top'
+    if 300 <= cx <= 640 and 150 <= cy <= 880:
+        return 'left'
+    if 1330 <= cx <= 1620 and 120 <= cy <= 880:
+        return 'right'
+    return None
+
+
+class RiverTemplates:
+    def __init__(self, folder):
+        from PIL import Image
+        self.names, pics = [], []
+        for f in sorted(glob.glob(os.path.join(folder, '*.png'))):
+            face = tile_face(_load_png(f))
+            self.names.append(os.path.basename(f).split('_')[0])
+            pics.append(np.asarray(Image.fromarray(face).resize(RIVER_SIZE, Image.BILINEAR)).astype(np.int16))
+        self.pics = np.stack(pics)
+        self.man = [i for i, n in enumerate(self.names) if n.endswith('m')]
+
+    def match(self, upright):
+        """(name, distance) for an upright river tile face (any size)."""
+        from PIL import Image
+        c = np.asarray(Image.fromarray(upright).resize(RIVER_SIZE, Image.BILINEAR)).astype(np.int16)
+        d = np.abs(self.pics - c[None]).mean(axis=(1, 2, 3))
+        k = int(np.argmin(d))
+        name, dist = self.names[k], float(d[k])
+        if name.endswith('m'):
+            # the number of a man tile is only the small glyph at the top: compare that part alone
+            h = RIVER_SIZE[1] * 2 // 5
+            top = c[:h]
+            best = None
+            for i in self.man:
+                p = self.pics[i][:h]
+                dd = min(float(np.abs(np.roll(np.roll(p, dy, 0), dx, 1) - top).mean())
+                         for dy in (-2, -1, 0, 1, 2) for dx in (-2, -1, 0, 1, 2))
+                if best is None or dd < best[1]:
+                    best = (self.names[i], dd)
+            name = best[0]
+        return name, dist
+
+
+def read_rivers(img, river_templates, max_dist=40.0):
+    """Discards on the table: {'self'|'right'|'top'|'left': [(name, sideways), ...]}. A sideways tile is
+    the one its player declared riichi with. Tiles it cannot match well are left out."""
+    from PIL import Image
+    from scipy import ndimage
+    white = img.min(axis=2) > 175
+    white[880:] = False
+    labels, n = ndimage.label(white)
+    out = {s: [] for s in SEAT_TURN}
+    for sl in ndimage.find_objects(labels):
+        if sl is None:
+            continue
+        h, w = sl[0].stop - sl[0].start, sl[1].stop - sl[1].start
+        if not (38 <= min(h, w) <= 52 and 54 <= max(h, w) <= 72):
+            continue
+        cy, cx = (sl[0].start + sl[0].stop) // 2, (sl[1].start + sl[1].stop) // 2
+        seat = _seat_of(cx, cy)
+        if seat is None:
+            continue
+        turn = SEAT_TURN[seat]
+        portrait = h > w
+        normal_portrait = turn in (0, 180)
+        sideways = portrait != normal_portrait
+        face = Image.fromarray(tile_face(img[sl]))
+        # turn it back upright; a sideways (riichi) tile is turned one more quarter
+        angles = [turn + 90, turn - 90] if sideways else [turn]
+        best = None
+        for a in angles:
+            up = np.asarray(face.rotate(-a, expand=True))
+            name, dist = river_templates.match(up)
+            if best is None or dist < best[1]:
+                best = (name, dist)
+        if best[1] <= max_dist:
+            out[seat].append((best[0], sideways, (cx, cy)))
+    return out

@@ -69,3 +69,21 @@ class Consistency(unittest.TestCase):
                 c13[t] += 1
                 self.assertEqual(e.shanten(c13), s - 1)
                 c13[t] -= 1
+
+
+class Defence(unittest.TestCase):
+    def test_genbutsu_beats_everything(self):
+        river = {e.INDEX['5m']}
+        seen = [0] * 34
+        self.assertEqual(e.danger(e.INDEX['5m'], river, seen), 0)
+        self.assertLess(e.danger(e.INDEX['2m'], {e.INDEX['5m']}, seen), e.danger(e.INDEX['2p'], river, seen))
+        # nakasuji 5s: 2s and 8s gone
+        both = {e.INDEX['2s'], e.INDEX['8s']}
+        self.assertLess(e.danger(e.INDEX['5s'], both, seen), e.danger(e.INDEX['5s'], {e.INDEX['2s']}, seen))
+
+    def test_folds_with_the_safe_tile(self):
+        hand = e.parse('147m 258p 369s ESW 5m')
+        river = {e.INDEX['9s']}
+        visible = list(hand)
+        t, d, s = e.defensive_discard(hand, [river], visible)
+        self.assertEqual((e.NAMES[t], d), ('9s', 0.0))

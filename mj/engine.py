@@ -192,3 +192,46 @@ def tenpai_discards(counts, called=0):
                 out.append(t)
             counts[t] += 1
     return out
+
+
+# ---------------------------------------------------------------- defence against a riichi
+
+def danger(t, river, visible):
+    """How likely discarding tile t deals into a riichi player whose discards are `river` (tile ids),
+    on a rough 0..8 scale. visible[t]: copies of t that can be seen (all rivers and our hand)."""
+    if t in river:
+        return 0.0                      # genbutsu: they cannot ron on a tile they discarded
+    if t >= 27:
+        seen = visible[t]
+        return 1.0 if seen >= 3 else 1.5 if seen == 2 else 2.5 if seen == 1 else 3.5
+    n, base = t % 9 + 1, t - t % 9
+    low = n - 3 >= 1 and (base + n - 4) in river    # n-3 discarded
+    high = n + 3 <= 9 and (base + n + 2) in river   # n+3 discarded
+    if n in (1, 9):
+        return 2.0 if (high or low) else 4.5
+    if n in (2, 8):
+        return 2.5 if (high or low) else 5.5
+    if n in (3, 7):
+        return 3.0 if (high or low) else 6.5
+    if low and high:
+        return 3.5                      # nakasuji: both sides covered
+    return 5.0 if (low or high) else 8.0
+
+
+def defensive_discard(counts, riichi_rivers, visible, called=0):
+    """The safest tile to discard against one or more riichi players (by the most dangerous of them),
+    keeping the hand as good as possible among equally safe tiles. Returns (tile, danger, shanten_after)."""
+    best = None
+    for t in range(34):
+        if counts[t] == 0:
+            continue
+        d = max(danger(t, r, visible) for r in riichi_rivers)
+        counts[t] -= 1
+        s = shanten(counts, called)
+        u = sum(ukeire(counts, visible, called).values())
+        counts[t] += 1
+        key = (d, s, -u)
+        if best is None or key < best[0]:
+            best = (key, t, d, s)
+    _, t, d, s = best
+    return t, d, s

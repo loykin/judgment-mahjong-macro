@@ -83,3 +83,22 @@ class PromptWords(unittest.TestCase):
 
     def test_score_plates_on_a_win(self):
         self.assertTrue(vision.score_band(load('result_win.png')))
+
+
+class Rivers(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.rt = vision.RiverTemplates(os.path.join(HERE, 'templates', 'hand'))
+
+    def test_reads_every_river_and_who_is_in_riichi(self):
+        r = vision.read_rivers(load('prompt_pon.png'), self.rt)
+        by_x = lambda seat: [n for n, _, p in sorted(r[seat], key=lambda t: t[2][0])]
+        by_y = lambda seat: [n for n, _, p in sorted(r[seat], key=lambda t: t[2][1])]
+        self.assertEqual(by_x('top'), ['4p', '1s', '9p', '6m', '3m', '9s'])
+        self.assertEqual(by_y('left'), ['F', 'N', '3s', 'P', '2p', 'E'])
+        self.assertEqual(by_y('right'), ['3m', '8p', '2p', 'N', 'W', '6m'])
+        self.assertEqual(by_x('self'), ['1p', 'S', '1m', '1m', '9p', '8p'])
+        self.assertFalse(any(sw for tiles in r.values() for _, sw, _ in tiles))
+        late = vision.read_rivers(load('stuck_slot3.png'), self.rt)
+        self.assertEqual([n for n, sw, _ in late['right'] if sw], ['5p'])
+        self.assertEqual({s: len(t) for s, t in late.items()}, {'self': 13, 'right': 13, 'top': 13, 'left': 13})
